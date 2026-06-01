@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540">
+<rect width="100%" height="100%" fill="white"/>
+<text x="480.0" y="24" text-anchor="middle" font-family="Arial" font-size="20">Loss vs Step</text>
+<line x1="80" y1="480" x2="930" y2="480" stroke="#333"/>
+<line x1="80" y1="40" x2="80" y2="480" stroke="#333"/>
+<line x1="80" y1="480.00" x2="930" y2="480.00" stroke="#e0e0e0"/>
+<text x="70" y="484.00" text-anchor="end" font-family="Arial" font-size="12">3.905</text>
+<line x1="80" y1="392.00" x2="930" y2="392.00" stroke="#e0e0e0"/>
+<text x="70" y="396.00" text-anchor="end" font-family="Arial" font-size="12">4.171</text>
+<line x1="80" y1="304.00" x2="930" y2="304.00" stroke="#e0e0e0"/>
+<text x="70" y="308.00" text-anchor="end" font-family="Arial" font-size="12">4.436</text>
+<line x1="80" y1="216.00" x2="930" y2="216.00" stroke="#e0e0e0"/>
+<text x="70" y="220.00" text-anchor="end" font-family="Arial" font-size="12">4.702</text>
+<line x1="80" y1="128.00" x2="930" y2="128.00" stroke="#e0e0e0"/>
+<text x="70" y="132.00" text-anchor="end" font-family="Arial" font-size="12">4.968</text>
+<line x1="80" y1="40.00" x2="930" y2="40.00" stroke="#e0e0e0"/>
+<text x="70" y="44.00" text-anchor="end" font-family="Arial" font-size="12">5.234</text>
+<line x1="80.00" y1="40" x2="80.00" y2="480" stroke="#f0f0f0"/>
+<text x="80.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">500</text>
+<line x1="250.00" y1="40" x2="250.00" y2="480" stroke="#f0f0f0"/>
+<text x="250.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">2400</text>
+<line x1="420.00" y1="40" x2="420.00" y2="480" stroke="#f0f0f0"/>
+<text x="420.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">4300</text>
+<line x1="590.00" y1="40" x2="590.00" y2="480" stroke="#f0f0f0"/>
+<text x="590.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">6200</text>
+<line x1="760.00" y1="40" x2="760.00" y2="480" stroke="#f0f0f0"/>
+<text x="760.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">8100</text>
+<line x1="930.00" y1="40" x2="930.00" y2="480" stroke="#f0f0f0"/>
+<text x="930.00" y="502" text-anchor="middle" font-family="Arial" font-size="12">1e+04</text>
+<polyline fill="none" stroke="#1f77b4" stroke-width="2.5" points="80.00,70.34 124.74,198.46 169.47,251.12 214.21,290.64 258.95,320.18 303.68,332.37 348.42,350.39 393.16,363.11 437.89,382.72 482.63,387.09 527.37,399.05 572.11,402.29 616.84,406.07 661.58,427.89 706.32,424.18 751.05,426.37 795.79,430.35 840.53,449.66 885.26,447.90 930.00,432.30"/>
+<circle cx="930.00" cy="432.30" r="3.5" fill="#1f77b4"/>
+<polyline fill="none" stroke="#2ca02c" stroke-width="2.5" points="930.00,359.63"/>
+<circle cx="930.00" cy="359.63" r="3.5" fill="#2ca02c"/>
+<line x1="780" y1="50" x2="800" y2="50" stroke="#1f77b4" stroke-width="3"/>
+<text x="808" y="54" font-family="Arial" font-size="12">loss</text>
+<line x1="780" y1="72" x2="800" y2="72" stroke="#2ca02c" stroke-width="3"/>
+<text x="808" y="76" font-family="Arial" font-size="12">train_loss</text>
+<text x="505.0" y="525" text-anchor="middle" font-family="Arial" font-size="14">step</text>
+<text x="22" y="260.0" text-anchor="middle" font-family="Arial" font-size="14" transform="rotate(-90 22 260.0)">loss</text>
+<!-- x_key: global_step -->
+</svg>

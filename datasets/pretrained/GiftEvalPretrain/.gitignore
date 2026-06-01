@@ -1,0 +1,6 @@
+*
+!.gitignore
+!README.md
+!dataset_list.txt
+!download_gifteval_pretrain.py
+!official_dataset_mapping.md

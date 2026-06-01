@@ -1,0 +1,68 @@
+# Chronos-2 official training datasets found in autogluon/chronos_datasets.
+# One config name per line. Blank lines and comments are ignored.
+
+# Electricity
+electricity_15min
+monash_electricity_hourly
+monash_electricity_weekly
+
+# KDD Cup (2018)
+monash_kdd_cup_2018
+
+# M4
+m4_daily
+m4_hourly
+m4_monthly
+m4_weekly
+
+# Mexico City Bikes
+mexico_city_bikes
+
+# Pedestrian Counts
+monash_pedestrian_counts
+
+# Solar
+solar
+solar_1h
+
+# Taxi
+taxi_30min
+taxi_1h
+
+# Uber TLC
+uber_tlc_hourly
+uber_tlc_daily
+
+# USHCN
+ushcn_daily
+
+# Weatherbench
+weatherbench_daily
+weatherbench_hourly_10m_u_component_of_wind
+weatherbench_hourly_10m_v_component_of_wind
+weatherbench_hourly_2m_temperature
+weatherbench_hourly_geopotential
+weatherbench_hourly_potential_vorticity
+weatherbench_hourly_relative_humidity
+weatherbench_hourly_specific_humidity
+weatherbench_hourly_temperature
+weatherbench_hourly_toa_incident_solar_radiation
+weatherbench_hourly_total_cloud_cover
+weatherbench_hourly_total_precipitation
+weatherbench_hourly_u_component_of_wind
+weatherbench_hourly_v_component_of_wind
+weatherbench_hourly_vorticity
+weatherbench_weekly
+
+# Wiki
+wiki_daily_100k
+
+# Wind Farms
+wind_farms_daily
+wind_farms_hourly
+
+# Temperature-Rain
+monash_temperature_rain
+
+# London Smart Meters
+monash_london_smart_meters

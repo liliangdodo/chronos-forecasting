@@ -18,8 +18,14 @@
     python kernel-synth.py \
         --num-series <num of series to generate> \
         --max-kernels <max number of kernels to use per series>
+
+    # Generate cotemporaneous multivariate synthetic data
+    python kernel-synth.py \
+        --num-series <num of multivariate series to generate> \
+        --num-variables <num of variables per series> \
+        --output-path ./kernelsynth-cotemporaneous-multivariate-data.arrow
     ```
-    The generated time series will be saved in a [GluonTS](https://github.com/awslabs/gluonts)-comptabile arrow file `kernelsynth-data.arrow`.
+    The generated time series will be saved in a [GluonTS](https://github.com/awslabs/gluonts)-comptabile Arrow file. By default this is `kernelsynth-data.arrow` for univariate generation; the multivariate example above writes `kernelsynth-cotemporaneous-multivariate-data.arrow`.
 
 ## Pretraining (and fine-tuning) Chronos models
 - Install this package with with the `dev` extra:
@@ -97,8 +103,13 @@
         --learning-rate 0.001
     ```
     The output and checkpoints will be saved in `output/run-{id}/`.
+ - Chronos-2 uses a separate training entrypoint with a Chronos-2-specific patch/value-space training path:
+    ```sh
+    CUDA_VISIBLE_DEVICES=0 python training/train-2.py --config training/configs/chronos-2-small.yaml
+    ```
+    The provided `chronos-2-small.yaml` mixes `tsmixup-data.arrow` with the multivariate synthetic dataset `kernelsynth-cotemporaneous-multivariate-data.arrow`. Set `random_init: true` in the YAML for pretraining from scratch. To continue training from an existing Chronos-2 checkpoint, set `random_init: false` and provide `model_id`; in that mode, the checkpoint's architecture config is reused and the script only expands context/output horizon constraints when needed.
 > [!TIP]  
-> If the initial training step is too slow, you might want to change the `shuffle_buffer_length` and/or set `torch_compile` to `false`.
+> If the initial training step is too slow, you might want to change the `shuffle_buffer_length` (for `training/train.py`) and/or set `torch_compile` to `false`.
 
 > [!IMPORTANT]  
 > When pretraining causal models (such as GPT2), the training script does [`LastValueImputation`](https://github.com/awslabs/gluonts/blob/f0f2266d520cb980f4c1ce18c28b003ad5cd2599/src/gluonts/transform/feature.py#L103) for missing values by default. If you pretrain causal models, please ensure that missing values are imputed similarly before passing the context tensor to `ChronosPipeline.predict()` for accurate results.

@@ -157,3 +157,88 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 ## 📃 License
 
 This project is licensed under the Apache-2.0 License.
+
+## 天数训练
+
+1. 容器内部训练
+
+```bash
+docker run -it -v /data:/data   -e HTTP_PROXY=http://10.251.41.17:80 -e HTTPS_PROXY=http://10.251.41.17:80 -e NO_PROXY=localhost,127.0.0.1  --privileged --cap-add=ALL --pid=host --net=host --name chronos-train corex:4.4.0-release-llm
+
+# 安装开发依赖
+pip install -e ".[dev]"
+
+# 保存为镜像
+docker commit chronos-train chronos-train:v1
+
+# 运行训练脚本
+
+# torchrun 默认使用 29500 端口，如果有其他torchrun 任务，可以用--master_port=29501指定其他端口
+docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/chronos-forecasting && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,4,5,6,7 torchrun --nproc_per_node=6 --master_port=29501 scripts/training/train-2.py --config scripts/training/configs/chronos-2-small.yaml > train.log 2>&1"
+
+# 一键多个终止任务（慎用）
+docker exec chronos-train pkill -f "train-2.py|torchrun" # 注意用chronos-train中的所有任务都会杀死
+
+# 查找任务pid再手动终止
+docker exec chronos-train ps aux | grep -E "train_task.*train-2.py"
+docker exec chronos-train kill <PID> 
+#如发现任务为杀死，是因为torchrun存在子进程
+docker exec chronos-train ps aux | grep -E "torchrun.*train-2.py"
+docker exec chronos-train kill <PID> 
+
+```
+
+> 环境依赖：train-2.py的运行需要transformers==4.57.6, 试了天数官方提供的4.52.4+corex.4.4.0版本会报错
+
+2. 终端直接运行
+
+```bash
+
+torchrun --nproc_per_node=4 scripts/training/train-2.py --config scripts/training/configs/chronos-2-small.yaml 2>&1 | tee train.log
+
+```
+
+3. 天数常驻运行任务
+```bash
+docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/train_task && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 torchrun --nproc_per_node=8 scripts/training/train-2.py --config scripts/training/configs/chronos-2-small.yaml > train.log 2>&1"
+
+# 查找任务pid再手动终止
+docker exec chronos-train ps aux | grep -E "train_task.*train-2.py"
+docker exec chronos-train kill <PID> 
+#如发现任务为杀死，是因为torchrun存在子进程
+docker exec chronos-train ps aux | grep -E "torchrun.*train-2.py"
+docker exec chronos-train kill <PID> 
+
+```
+
+4. 测试任务
+```bash
+docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/train_task && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=8,9,10,11 torchrun --nproc_per_node=4 scripts/training/train-2.py --config scripts/training/configs/chronos-2-eval.yaml > train.log 2>&1"
+
+```
+
+## 本地开发
+
+主要是为了调试脚本、下载数据集
+
+uv python install 3.10
+
+uv sync --python 3.10 --extra dev
+
+1. 训练集下载 
+
+在服务器无法联huggingface的情况下，本地先下载好数据集，再上传到服务器
+
+uv run python datasets/pretrained/download_chronos_datasets.py
+
+
+
+### 待解决的问题
+
+1. 是否需要在训练时加入验证集
+
+2. 评测过程加入更多的评测数据集，GIFT-EVAL
+
+3. 评测过程如何与官方发布的chronos-2的权重进行全面的对比
+
+4. 加入chronos-2官方论文中提到的数据集

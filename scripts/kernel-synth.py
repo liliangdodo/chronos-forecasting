@@ -182,15 +182,149 @@ def generate_time_series(max_kernels: int = 5):
         return {"start": np.datetime64("2000-01-01 00:00", "s"), "target": ts.squeeze()}
 
 
+def sample_random_correlation_matrix(num_variables: int) -> np.ndarray:
+    """Sample a random positive definite correlation matrix.
+
+    The matrix is generated from a random covariance matrix and then shrunk
+    towards identity to avoid near-singular cases.
+    """
+    if num_variables < 1:
+        raise ValueError(f"Expected num_variables >= 1, but found {num_variables}.")
+
+    if num_variables == 1:
+        return np.eye(1, dtype=np.float64)
+
+    gaussian_matrix = np.random.normal(size=(num_variables, num_variables))
+    covariance = gaussian_matrix @ gaussian_matrix.T
+    std = np.sqrt(np.diag(covariance))
+    correlation = covariance / np.outer(std, std)
+
+    shrinkage = np.random.uniform(0.1, 0.4)
+    correlation = (1.0 - shrinkage) * correlation + shrinkage * np.eye(num_variables)
+    correlation = (correlation + correlation.T) / 2
+    correlation += 1e-6 * np.eye(num_variables)
+
+    return correlation
+
+
+def apply_cotemporaneous_multivariatizer(
+    base_targets: np.ndarray,
+    correlation_matrix: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Inject instantaneous cross-variable correlation into univariate series.
+
+    Parameters
+    ----------
+    base_targets
+        Array of shape (num_variables, time_length) containing independent base
+        univariate time series.
+    correlation_matrix, optional
+        Positive definite target correlation matrix of shape
+        (num_variables, num_variables). When not provided, a random correlation
+        matrix is sampled.
+
+    Returns
+    -------
+    np.ndarray
+        Correlated multivariate time series with shape
+        (num_variables, time_length).
+    """
+    if base_targets.ndim != 2:
+        raise ValueError(
+            f"Expected base_targets to be 2D with shape (num_variables, time_length), got {base_targets.shape}."
+        )
+
+    num_variables, _ = base_targets.shape
+    if correlation_matrix is None:
+        correlation_matrix = sample_random_correlation_matrix(num_variables)
+    else:
+        correlation_matrix = np.asarray(correlation_matrix, dtype=np.float64)
+        if correlation_matrix.shape != (num_variables, num_variables):
+            raise ValueError(
+                "Expected correlation_matrix to have shape "
+                f"({num_variables}, {num_variables}), got {correlation_matrix.shape}."
+            )
+        correlation_matrix = (correlation_matrix + correlation_matrix.T) / 2
+        np.linalg.cholesky(correlation_matrix)
+
+    means = base_targets.mean(axis=1, keepdims=True)
+    stds = base_targets.std(axis=1, keepdims=True)
+    stds = np.where(stds < 1e-6, 1.0, stds)
+
+    standardized_targets = (base_targets - means) / stds
+    mixing_matrix = np.linalg.cholesky(correlation_matrix)
+    correlated_targets = mixing_matrix @ standardized_targets
+
+    # Restore each variable's marginal location and scale after correlation injection.
+    return correlated_targets * stds + means
+
+
+def generate_cotemporaneous_multivariate_time_series(
+    num_variables: int,
+    max_kernels: int = 5,
+    correlation_matrix: Optional[np.ndarray] = None,
+):
+    """Generate one multivariate time series via a cotemporaneous multivariatizer.
+
+    The base univariate series are first generated independently with
+    ``generate_time_series`` and then mixed with a Cholesky factor so that the
+    variables become correlated at the same time index.
+    """
+    if num_variables < 1:
+        raise ValueError(f"Expected num_variables >= 1, but found {num_variables}.")
+
+    base_series = [generate_time_series(max_kernels=max_kernels) for _ in range(num_variables)]
+    base_targets = np.stack([series["target"] for series in base_series], axis=0)
+    multivariate_target = apply_cotemporaneous_multivariatizer(
+        base_targets=base_targets,
+        correlation_matrix=correlation_matrix,
+    )
+
+    return {
+        "start": base_series[0]["start"],
+        "target": multivariate_target,
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-N", "--num-series", type=int, default=1000_000)
     parser.add_argument("-J", "--max-kernels", type=int, default=5)
+    parser.add_argument(
+        "-V",
+        "--num-variables",
+        type=int,
+        default=1,
+        help="Number of variables per generated series. Values > 1 use the cotemporaneous multivariatizer.",
+    )
+    parser.add_argument(
+        "-O",
+        "--output-path",
+        type=Path,
+        default=None,
+        help="Optional output path. Defaults depend on whether the output is univariate or multivariate.",
+    )
     args = parser.parse_args()
-    path = Path(__file__).parent / "kernelsynth-data.arrow"
+
+    if args.output_path is None:
+        default_filename = (
+            "kernelsynth-data.arrow"
+            if args.num_variables == 1
+            else "kernelsynth-cotemporaneous-multivariate-data.arrow"
+        )
+        path = Path(__file__).parent / default_filename
+    else:
+        path = args.output_path
 
     generated_dataset = Parallel(n_jobs=-1)(
-        delayed(generate_time_series)(max_kernels=args.max_kernels)
+        (
+            delayed(generate_time_series)(max_kernels=args.max_kernels)
+            if args.num_variables == 1
+            else delayed(generate_cotemporaneous_multivariate_time_series)(
+                num_variables=args.num_variables,
+                max_kernels=args.max_kernels,
+            )
+        )
         for _ in tqdm(range(args.num_series))
     )
 

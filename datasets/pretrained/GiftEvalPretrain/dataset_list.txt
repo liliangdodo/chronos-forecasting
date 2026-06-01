@@ -1,0 +1,20 @@
+# Chronos-2 official training datasets sourced from Salesforce/GiftEvalPretrain.
+# One GiftEvalPretrain subdirectory per line. Blank lines and comments are ignored.
+
+# Alibaba Cluster Trace (2018) - 3G
+alibaba_cluster_trace_2018
+
+# Azure VM Traces (2017) - 10G
+azure_vm_traces_2017
+
+# Borg Cluster Data (2011) - 15G
+borg_cluster_data_2011
+
+# LargeST (2017) -3.5G
+largest_2017
+
+# Q-Traffic - 1G
+Q-TRAFFIC
+
+# Buildings 900K - 60G
+buildings_900k

@@ -9,6 +9,7 @@ import sys
 import json
 import itertools
 import random
+import time
 from copy import deepcopy
 from pathlib import Path
 from functools import partial
@@ -48,6 +49,18 @@ from chronos import ChronosConfig, ChronosTokenizer
 
 
 app = typer.Typer(pretty_exceptions_enable=False)
+
+
+def _json_default(value):
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
 
 
 def is_main_process() -> bool:
@@ -104,17 +117,16 @@ def get_training_job_info() -> Dict:
     return job_info
 
 
-def save_training_info(ckpt_path: Path, training_config: Dict):
+def save_training_info(ckpt_path: Path, training_config: Dict, training_duration_seconds: Optional[float] = None):
     """
     Save info about this training job in a json file for documentation.
     """
     assert ckpt_path.is_dir()
+    payload = {"training_config": training_config, "job_info": get_training_job_info()}
+    if training_duration_seconds is not None:
+        payload["training_duration_seconds"] = training_duration_seconds
     with open(ckpt_path / "training_info.json", "w") as fp:
-        json.dump(
-            {"training_config": training_config, "job_info": get_training_job_info()},
-            fp,
-            indent=4,
-        )
+        json.dump(payload, fp, indent=4, default=_json_default)
 
 
 def get_next_path(
@@ -684,13 +696,17 @@ def main(
         train_dataset=shuffled_train_dataset,
     )
     log_on_main("Training", logger)
+    train_start_time = time.perf_counter()
 
     trainer.train()
+    training_duration_seconds = time.perf_counter() - train_start_time
 
     if is_main_process():
         model.save_pretrained(output_dir / "checkpoint-final")
         save_training_info(
-            output_dir / "checkpoint-final", training_config=raw_training_config
+            output_dir / "checkpoint-final",
+            training_config=raw_training_config,
+            training_duration_seconds=training_duration_seconds,
         )
 
 

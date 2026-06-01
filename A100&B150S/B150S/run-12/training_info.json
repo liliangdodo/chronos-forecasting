@@ -1,0 +1,115 @@
+{
+    "training_config": {
+        "training_data_paths": [
+            "/data/liliang/BXprojects/CauKer/CauKer10K_H3000_V20.arrow"
+        ],
+        "probability": [
+            1.0
+        ],
+        "validation_data_paths": null,
+        "context_length": 2048,
+        "prediction_length": 64,
+        "min_past": 64,
+        "max_steps": 10000,
+        "save_steps": 1000,
+        "log_steps": 500,
+        "per_device_train_batch_size": 32,
+        "per_device_eval_batch_size": null,
+        "learning_rate": 0.001,
+        "optim": "adamw_torch_fused",
+        "gradient_accumulation_steps": 1,
+        "model_id": null,
+        "random_init": true,
+        "output_dir": "./output/",
+        "tf32": false,
+        "bf16": false,
+        "torch_compile": false,
+        "dataloader_num_workers": 0,
+        "max_missing_prop": 0.9,
+        "disable_data_parallel": true,
+        "lr_scheduler_type": "linear",
+        "warmup_ratio": 0.0,
+        "seed": 1380024230,
+        "input_patch_size": 16,
+        "input_patch_stride": 16,
+        "output_patch_size": 16,
+        "max_output_patches": 64,
+        "quantiles": [
+            0.01,
+            0.05,
+            0.1,
+            0.15,
+            0.2,
+            0.25,
+            0.3,
+            0.35,
+            0.4,
+            0.45,
+            0.5,
+            0.55,
+            0.6,
+            0.65,
+            0.7,
+            0.75,
+            0.8,
+            0.85,
+            0.9,
+            0.95,
+            0.99
+        ],
+        "use_reg_token": true,
+        "use_arcsinh": true,
+        "time_encoding_scale": 8192,
+        "d_model": 768,
+        "d_kv": 64,
+        "d_ff": 3072,
+        "num_layers": 12,
+        "num_heads": 12,
+        "dropout_rate": 0.1,
+        "layer_norm_epsilon": 1e-06,
+        "initializer_factor": 0.05,
+        "feed_forward_proj": "relu",
+        "pad_token_id": 0,
+        "rope_theta": 10000.0,
+        "attn_implementation": "sdpa",
+        "launch_time": "2026-05-25T09:45:21.257411+08:00",
+        "has_sm80": false
+    },
+    "job_info": {
+        "cuda_available": true,
+        "device_count": 4,
+        "device_names": {
+            "0": "Iluvatar BI-V150S",
+            "1": "Iluvatar BI-V150S",
+            "2": "Iluvatar BI-V150S",
+            "3": "Iluvatar BI-V150S"
+        },
+        "mem_info": {
+            "0": [
+                23683137536,
+                34359738368
+            ],
+            "1": [
+                23540531200,
+                34359738368
+            ],
+            "2": [
+                23469228032,
+                34359738368
+            ],
+            "3": [
+                23540531200,
+                34359738368
+            ]
+        },
+        "torchelastic_launched": true,
+        "world_size": 4,
+        "python_version": "3.12.11 (main, Jul 31 2025, 06:45:11) [GCC 13.3.0]",
+        "torch_version": "2.7.1",
+        "numpy_version": "1.26.4",
+        "gluonts_version": "0.16.2",
+        "transformers_version": "4.57.6",
+        "accelerate_version": "1.7.0"
+    },
+    "training_duration_seconds": 5618.593063577078
+}

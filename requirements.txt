@@ -1,0 +1,9 @@
+gluonts[pro]~=0.16
+datasets>=3.0,<4
+typer
+tensorboard
+typer-config
+joblib
+fev>=0.6.1
+rich
+pandas>=2.0,<2.4
