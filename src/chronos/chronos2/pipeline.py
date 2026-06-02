@@ -253,7 +253,8 @@ class Chronos2Pipeline(BaseChronosPipeline):
         assert isinstance(output_dir, Path)
 
         use_cpu = str(self.model.device) == "cpu"
-        has_sm80 = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
+        tf32_supported = torch.cuda.is_available() and torch.cuda.is_tf32_supported()
+        bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
 
         # warn user if a cuda device is available and CPU fine-tuning is used
         if use_cpu and torch.cuda.is_available():
@@ -279,8 +280,8 @@ class Chronos2Pipeline(BaseChronosPipeline):
             max_steps=num_steps,
             gradient_accumulation_steps=1,
             dataloader_num_workers=0,
-            tf32=has_sm80 and not use_cpu,
-            bf16=has_sm80 and not use_cpu,
+            tf32=tf32_supported and not use_cpu,
+            bf16=bf16_supported and not use_cpu,
             save_only_model=True,
             prediction_loss_only=True,
             save_total_limit=1,

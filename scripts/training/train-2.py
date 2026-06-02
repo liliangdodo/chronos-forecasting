@@ -3,6 +3,7 @@
 
 import ast
 import csv
+import json
 import logging
 import math
 import random
@@ -111,8 +112,50 @@ def _to_numpy_sequence(value: Any, np_dtype=None):
     return array
 
 
+def _infer_target_from_sequence_columns(entry: Mapping[str, Any], np_dtype=np.float32) -> np.ndarray:
+    """Infer target variates from numeric sequence columns in long-format HF datasets."""
+    excluded_columns = {
+        "id",
+        "item_id",
+        "start",
+        "timestamp",
+        "freq",
+        "past_covariates",
+        "future_covariates",
+    }
+    expected_length = len(entry["timestamp"]) if "timestamp" in entry else None
+    target_columns: list[str] = []
+    target_arrays: list[np.ndarray] = []
+
+    for column_name, value in entry.items():
+        if column_name in excluded_columns or value is None:
+            continue
+        try:
+            array = _to_numpy_sequence(value, np_dtype=np_dtype)
+        except (TypeError, ValueError):
+            continue
+        if array.ndim != 1 or not np.issubdtype(array.dtype, np.number):
+            continue
+        if expected_length is not None and len(array) != expected_length:
+            continue
+        target_columns.append(column_name)
+        target_arrays.append(array)
+
+    if not target_arrays:
+        raise ValueError(
+            "Chronos-2 training data entry does not contain `target`, and no numeric sequence columns "
+            f"could be inferred as targets. Available columns: {sorted(entry.keys())}"
+        )
+
+    logger.debug(f"Inferred target columns: {target_columns}")
+    return np.stack(target_arrays)
+
+
 def _normalize_target(entry: Mapping[str, Any], np_dtype=np.float32) -> np.ndarray:
-    target = _to_numpy_sequence(entry["target"], np_dtype=np_dtype)
+    if "target" in entry:
+        target = _to_numpy_sequence(entry["target"], np_dtype=np_dtype)
+    else:
+        target = _infer_target_from_sequence_columns(entry, np_dtype=np_dtype)
 
     if target.ndim == 1:
         target = target[None, :]
@@ -650,7 +693,17 @@ class HFDiskDataset:
 
 
 def is_hf_saved_dataset(path: Path) -> bool:
-    return path.is_dir() and (path / "state.json").is_file() and (path / "dataset_info.json").is_file()
+    state_path = path / "state.json"
+    if not (path.is_dir() and state_path.is_file() and (path / "dataset_info.json").is_file()):
+        return False
+
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        data_files = state["_data_files"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return False
+
+    return bool(data_files) and all((path / data_file["filename"]).is_file() for data_file in data_files)
 
 
 def is_hf_config_dataset_dir(path: Path, split: str = "train") -> bool:
@@ -753,12 +806,51 @@ def expand_probabilities_for_paths(
     return expanded_paths, expanded_probabilities, missing_paths
 
 
+ValidationRecordId = tuple[str, int]
+
+
+class IdentifiedEntry(dict):
+    """Dataset entry carrying a stable source path and row index."""
+
+    def __init__(self, entry: Mapping[str, Any], record_id: ValidationRecordId) -> None:
+        super().__init__(entry)
+        self.record_id = record_id
+
+
+class IdentifiedDataset:
+    """Attach stable IDs without adding fields to the model input."""
+
+    def __init__(self, dataset, source_path: Path) -> None:
+        self.dataset = dataset
+        self.source_path = str(source_path.resolve())
+
+    def __iter__(self):
+        for row_index, entry in enumerate(self.dataset):
+            yield IdentifiedEntry(entry, record_id=(self.source_path, row_index))
+
+
+class ExcludeValidationEntriesDataset:
+    """Filter validation records out of the training stream."""
+
+    def __init__(self, dataset, excluded_record_ids: set[ValidationRecordId]) -> None:
+        self.dataset = dataset
+        self.excluded_record_ids = excluded_record_ids
+
+    def __iter__(self):
+        for entry in self.dataset:
+            if entry.record_id not in self.excluded_record_ids:
+                yield entry
+
+
 def build_raw_dataset(path: Path):
     if path.is_file() and path.suffix == ".arrow":
-        return ArrowFileDataset(path=path)
-    if is_hf_saved_dataset(path):
-        return HFDiskDataset(path=path)
-    raise ValueError(f"Unsupported training data path: {path}")
+        dataset = ArrowFileDataset(path=path)
+    elif is_hf_saved_dataset(path):
+        dataset = HFDiskDataset(path=path)
+    else:
+        raise ValueError(f"Unsupported training data path: {path}")
+
+    return IdentifiedDataset(dataset=dataset, source_path=path)
 
 
 def has_enough_chronos2_observations(
@@ -772,6 +864,88 @@ def has_enough_chronos2_observations(
         and np.isnan(target).mean() <= max_missing_prop
         and np.isfinite(target).any()
     )
+
+
+def sample_validation_entries(
+    datasets: Sequence,
+    probabilities: Sequence[float],
+    num_samples: int,
+    seed: int,
+) -> list[dict]:
+    """Sample a fixed, lightweight validation set from one or more iterable datasets."""
+    if num_samples <= 0:
+        return []
+    if len(datasets) != len(probabilities):
+        raise ValueError("`datasets` and `probabilities` must have the same length.")
+    if not datasets:
+        raise ValueError("Cannot sample validation entries from an empty dataset list.")
+
+    active_datasets = []
+    active_probabilities = []
+    for dataset, probability in zip(datasets, probabilities):
+        probability = float(probability)
+        if not math.isfinite(probability) or probability < 0:
+            raise ValueError(f"Validation sampling probabilities must be finite and non-negative, got {probability}.")
+        if probability > 0:
+            active_datasets.append(dataset)
+            active_probabilities.append(probability)
+    if not active_datasets:
+        raise ValueError("At least one validation sampling probability must be positive.")
+
+    iterators = [iter(dataset) for dataset in active_datasets]
+    rng = np.random.default_rng(seed)
+    sampled_entries: list[dict] = []
+
+    while len(sampled_entries) < num_samples and active_datasets:
+        normalized_probabilities = np.asarray(active_probabilities, dtype=np.float64)
+        normalized_probabilities /= normalized_probabilities.sum()
+        dataset_idx = int(rng.choice(len(iterators), p=normalized_probabilities))
+
+        try:
+            entry = next(iterators[dataset_idx])
+        except StopIteration:
+            del active_datasets[dataset_idx]
+            del active_probabilities[dataset_idx]
+            del iterators[dataset_idx]
+            continue
+
+        sampled_entries.append(entry)
+
+    if len(sampled_entries) < num_samples:
+        raise ValueError(
+            f"Only {len(sampled_entries)} unique usable entries were found while sampling "
+            f"{num_samples} lightweight validation entries."
+        )
+
+    return sampled_entries
+
+
+def get_validation_record_ids(entries: Sequence[dict]) -> set[ValidationRecordId]:
+    record_ids = set()
+    for entry in entries:
+        if not isinstance(entry, IdentifiedEntry):
+            raise TypeError("Validation entries must carry stable source IDs.")
+        record_ids.add(entry.record_id)
+    return record_ids
+
+
+def write_validation_manifest(
+    path: Path,
+    *,
+    validation_seed: int,
+    validation_entries: Sequence[dict],
+) -> None:
+    record_ids = get_validation_record_ids(validation_entries)
+    payload = {
+        "validation_seed": validation_seed,
+        "num_validation_entries": len(validation_entries),
+        "num_excluded_training_entries": len(record_ids),
+        "records": [
+            {"source_path": source_path, "row_index": row_index}
+            for source_path, row_index in sorted(record_ids)
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 class Chronos2ArrowDataset(IterableDataset):
@@ -1035,6 +1209,8 @@ def main(
     training_data_paths: str,
     probability: Optional[str] = None,
     validation_data_paths: Optional[str] = None,
+    validation_num_samples: int = 256,
+    validation_seed: int = 0,
     context_length: int = 2048,
     prediction_length: int = 64,
     min_past: int = 64,
@@ -1101,7 +1277,11 @@ def main(
             f"and {len(probability)}."
         )
     probability = [float(prob) for prob in probability]
+    if any(not math.isfinite(prob) or prob < 0 for prob in probability) or sum(probability) <= 0:
+        raise ValueError("`probability` values must be finite, non-negative, and include at least one positive value.")
     probability = [prob / sum(probability) for prob in probability]
+    if validation_num_samples < 0:
+        raise ValueError(f"`validation_num_samples` must be non-negative, got {validation_num_samples}.")
 
     expanded_training_data_paths, expanded_probability, missing_training_paths = expand_probabilities_for_paths(
         training_data_paths,
@@ -1136,17 +1316,18 @@ def main(
             f"but found {input_patch_size} and {output_patch_size}."
         )
 
-    has_sm80 = torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
-    if tf32 and not has_sm80:
+    tf32_supported = torch.cuda.is_available() and torch.cuda.is_tf32_supported()
+    bf16_supported = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    if tf32 and not tf32_supported:
         log_on_main(
-            "TF32 format is only available on devices with compute capability >= 8. Setting tf32 to False.",
+            "TF32 format is not supported by the current CUDA device. Setting tf32 to False.",
             logger,
         )
         tf32 = False
 
-    if bf16 and not has_sm80:
+    if bf16 and not bf16_supported:
         log_on_main(
-            "bf16 is only enabled automatically on devices with compute capability >= 8. Setting bf16 to False.",
+            "bf16 is not supported by the current CUDA device. Setting bf16 to False.",
             logger,
         )
         bf16 = False
@@ -1205,28 +1386,61 @@ def main(
     ]
 
     eval_dataset = None
+    excluded_training_record_ids: set[ValidationRecordId] = set()
     memory_callback = MemoryTrackingCallback()
     callbacks = [LossHistoryCallback(logger), memory_callback]
-    if expanded_validation_data_paths:
+    if validation_num_samples > 0:
+        validation_source = "configured validation datasets"
+        validation_probabilities = [1.0] * len(expanded_validation_data_paths or [])
         log_on_main(
-            f"Loading and filtering {len(expanded_validation_data_paths)} datasets for validation: "
-            f"{[str(path) for path in expanded_validation_data_paths]}",
+            f"Sampling {validation_num_samples} fixed entries for lightweight validation.",
             logger,
         )
-        validation_datasets = [
-            Filter(
-                partial(
-                    has_enough_chronos2_observations,
-                    min_length=min_past + prediction_length,
-                    max_missing_prop=max_missing_prop,
-                ),
-                build_raw_dataset(Path(data_path)),
+        if expanded_validation_data_paths:
+            log_on_main(
+                f"Using {len(expanded_validation_data_paths)} configured validation datasets: "
+                f"{[str(path) for path in expanded_validation_data_paths]}",
+                logger,
             )
-            for data_path in expanded_validation_data_paths
-        ]
-        eval_dataset = Chronos2ArrowDataset(
+            validation_datasets = [
+                Filter(
+                    partial(
+                        has_enough_chronos2_observations,
+                        min_length=min_past + prediction_length,
+                        max_missing_prop=max_missing_prop,
+                    ),
+                    build_raw_dataset(Path(data_path)),
+                )
+                for data_path in expanded_validation_data_paths
+            ]
+        else:
+            validation_source = "training datasets"
+            validation_datasets = train_datasets
+            validation_probabilities = expanded_probability
+
+        validation_entries = sample_validation_entries(
             datasets=validation_datasets,
-            probabilities=[1.0] * len(validation_datasets),
+            probabilities=validation_probabilities,
+            num_samples=validation_num_samples,
+            seed=validation_seed,
+        )
+        excluded_training_record_ids = get_validation_record_ids(validation_entries)
+        log_on_main(
+            f"Cached {len(validation_entries)} lightweight validation entries sampled from {validation_source}; "
+            f"excluding {len(excluded_training_record_ids)} matching records from training.",
+            logger,
+        )
+        if is_main_process():
+            validation_manifest_path = output_dir / "validation_manifest.json"
+            write_validation_manifest(
+                validation_manifest_path,
+                validation_seed=validation_seed,
+                validation_entries=validation_entries,
+            )
+            log_on_main(f"Validation manifest written to {validation_manifest_path}", logger)
+        eval_dataset = Chronos2ArrowDataset(
+            datasets=[validation_entries],
+            probabilities=[1.0],
             context_length=context_length,
             prediction_length=prediction_length,
             batch_size=per_device_eval_batch_size or per_device_train_batch_size,
@@ -1235,6 +1449,12 @@ def main(
             mode="validation",
         )
         callbacks.append(EvaluateAndSaveFinalStepCallback())
+
+    if excluded_training_record_ids:
+        train_datasets = [
+            ExcludeValidationEntriesDataset(dataset, excluded_training_record_ids)
+            for dataset in train_datasets
+        ]
 
     log_on_main("Initializing model", logger)
     model = load_chronos2_model(

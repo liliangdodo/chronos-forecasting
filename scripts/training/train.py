@@ -551,15 +551,9 @@ def main(
     top_p: float = 1.0,
     seed: Optional[int] = None,
 ):
-    if tf32 and not (
-        torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8
-    ):
-        # TF32 floating point format is available only on NVIDIA GPUs
-        # with compute capability 8 and above. See link for details.
-        # https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capability-8-x
+    if tf32 and not (torch.cuda.is_available() and torch.cuda.is_tf32_supported()):
         log_on_main(
-            "TF32 format is only available on devices with compute capability >= 8. "
-            "Setting tf32 to False.",
+            "TF32 format is not supported by the current CUDA device. Setting tf32 to False.",
             logger,
         )
         tf32 = False
