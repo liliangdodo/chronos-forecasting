@@ -174,7 +174,7 @@ docker commit chronos-train chronos-train:v1
 # 运行训练脚本
 
 # torchrun 默认使用 29500 端口，如果有其他torchrun 任务，可以用--master_port=29501指定其他端口
-docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/chronos-forecasting && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,4,5,6,7 torchrun --nproc_per_node=6 --master_port=29501 scripts/training/train-2.py --config scripts/training/configs/chronos-2-small.yaml > train.log 2>&1"
+docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/chronos-forecasting && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --nproc_per_node=8 --master_port=29501 scripts/training/train-2.py --config scripts/training/configs/chronos-2-small.yaml > train.log 2>&1"
 
 # 一键多个终止任务（慎用）
 docker exec chronos-train pkill -f "train-2.py|torchrun" # 注意用chronos-train中的所有任务都会杀死
@@ -213,7 +213,7 @@ docker exec chronos-train kill <PID>
 
 4. 测试任务
 ```bash
-docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/train_task && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=8,9,10,11 torchrun --nproc_per_node=4 scripts/training/train-2.py --config scripts/training/configs/chronos-2-eval.yaml > train.log 2>&1"
+docker exec -d chronos-train bash -c "cd /data/liliang/BXprojects/train_task && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True CUDA_VISIBLE_DEVICES=8,9,10,11,12,13,14,15 torchrun --nproc_per_node=8 scripts/training/train-2.py --config scripts/training/configs/chronos-2-eval.yaml > train.log 2>&1"
 
 ```
 

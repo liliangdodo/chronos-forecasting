@@ -48,4 +48,4 @@ db.sqlite3
 .DS_Store
 
 output/
-scripts/training/configs
+A100&B150S/

@@ -646,30 +646,80 @@ class ArrowFileDataset:
     def __init__(self, path: Path, np_dtype=np.float32) -> None:
         self.path = Path(path)
         self.np_dtype = np_dtype
+        self._num_rows: Optional[int] = None
+        self._batch_offsets: Optional[list[tuple[int, int, int]]] = None
 
-    def __iter__(self):
+    @staticmethod
+    def _entry_from_batch(batch, row_idx: int) -> dict[str, Any]:
+        entry = {}
+        for col_idx, name in enumerate(batch.schema.names):
+            value = batch.column(col_idx)[row_idx].as_py()
+            if name in {"past_covariates", "future_covariates"} and isinstance(value, list):
+                value = {item["name"]: item["values"] for item in value}
+            entry[name] = value
+        return entry
+
+    def _open_reader(self):
         import pyarrow as pa
         import pyarrow.ipc as ipc
 
-        with pa.memory_map(str(self.path), "rb") as source:
-            try:
-                reader = ipc.open_file(source)
-            except pa.ArrowInvalid:
-                source.seek(0)
-                reader = ipc.open_stream(source)
+        source = pa.memory_map(str(self.path), "rb")
+        try:
+            reader = ipc.open_file(source)
+        except pa.ArrowInvalid:
+            source.seek(0)
+            reader = ipc.open_stream(source)
+        return source, reader
 
+    def _ensure_index(self) -> None:
+        if self._num_rows is not None and self._batch_offsets is not None:
+            return
+
+        source, reader = self._open_reader()
+        try:
+            batch_offsets = []
+            offset = 0
             for batch_idx in range(reader.num_record_batches):
                 batch = reader.get_batch(batch_idx)
-                columns = {name: batch.column(i) for i, name in enumerate(batch.schema.names)}
+                batch_offsets.append((offset, offset + batch.num_rows, batch_idx))
+                offset += batch.num_rows
+            self._num_rows = offset
+            self._batch_offsets = batch_offsets
+        finally:
+            source.close()
 
+    def __len__(self) -> int:
+        self._ensure_index()
+        assert self._num_rows is not None
+        return self._num_rows
+
+    def __getitem__(self, row_index: int) -> dict[str, Any]:
+        self._ensure_index()
+        assert self._num_rows is not None and self._batch_offsets is not None
+        if row_index < 0:
+            row_index += self._num_rows
+        if row_index < 0 or row_index >= self._num_rows:
+            raise IndexError(row_index)
+
+        source, reader = self._open_reader()
+        try:
+            for start, end, batch_idx in self._batch_offsets:
+                if start <= row_index < end:
+                    return self._entry_from_batch(reader.get_batch(batch_idx), row_index - start)
+        finally:
+            source.close()
+
+        raise IndexError(row_index)
+
+    def __iter__(self):
+        source, reader = self._open_reader()
+        try:
+            for batch_idx in range(reader.num_record_batches):
+                batch = reader.get_batch(batch_idx)
                 for row_idx in range(batch.num_rows):
-                    entry = {}
-                    for name, column in columns.items():
-                        value = column[row_idx].as_py()
-                        if name in {"past_covariates", "future_covariates"} and isinstance(value, list):
-                            value = {item["name"]: item["values"] for item in value}
-                        entry[name] = value
-                    yield entry
+                    yield self._entry_from_batch(batch, row_idx)
+        finally:
+            source.close()
 
 
 class HFDiskDataset:
@@ -677,8 +727,12 @@ class HFDiskDataset:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self._dataset = None
 
-    def __iter__(self):
+    def _load_dataset(self):
+        if self._dataset is not None:
+            return self._dataset
+
         try:
             from datasets import load_from_disk
         except ImportError as exc:
@@ -687,7 +741,22 @@ class HFDiskDataset:
                 "Install it with `uv sync --extra dev` or `uv pip install datasets`."
             ) from exc
 
-        dataset = load_from_disk(str(self.path))
+        self._dataset = load_from_disk(str(self.path))
+        return self._dataset
+
+    def __len__(self) -> int:
+        return len(self._load_dataset())
+
+    def __getitem__(self, row_index: int) -> dict[str, Any]:
+        dataset = self._load_dataset()
+        if row_index < 0:
+            row_index += len(dataset)
+        if row_index < 0 or row_index >= len(dataset):
+            raise IndexError(row_index)
+        return dict(dataset[int(row_index)])
+
+    def __iter__(self):
+        dataset = self._load_dataset()
         for entry in dataset:
             yield dict(entry)
 
@@ -824,6 +893,12 @@ class IdentifiedDataset:
         self.dataset = dataset
         self.source_path = str(source_path.resolve())
 
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, row_index: int) -> IdentifiedEntry:
+        return IdentifiedEntry(self.dataset[row_index], record_id=(self.source_path, int(row_index)))
+
     def __iter__(self):
         for row_index, entry in enumerate(self.dataset):
             yield IdentifiedEntry(entry, record_id=(self.source_path, row_index))
@@ -839,6 +914,25 @@ class ExcludeValidationEntriesDataset:
     def __iter__(self):
         for entry in self.dataset:
             if entry.record_id not in self.excluded_record_ids:
+                yield entry
+
+
+class FilteredRandomAccessDataset:
+    """Apply a predicate while preserving source row IDs for random validation sampling."""
+
+    def __init__(self, dataset, predicate) -> None:
+        self.dataset = dataset
+        self.predicate = predicate
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, row_index: int) -> IdentifiedEntry:
+        return self.dataset[row_index]
+
+    def __iter__(self):
+        for entry in self.dataset:
+            if self.predicate(entry):
                 yield entry
 
 
@@ -866,15 +960,10 @@ def has_enough_chronos2_observations(
     )
 
 
-def sample_validation_entries(
+def _validate_sampling_probabilities(
     datasets: Sequence,
     probabilities: Sequence[float],
-    num_samples: int,
-    seed: int,
-) -> list[dict]:
-    """Sample a fixed, lightweight validation set from one or more iterable datasets."""
-    if num_samples <= 0:
-        return []
+) -> tuple[list, list[float]]:
     if len(datasets) != len(probabilities):
         raise ValueError("`datasets` and `probabilities` must have the same length.")
     if not datasets:
@@ -892,8 +981,166 @@ def sample_validation_entries(
     if not active_datasets:
         raise ValueError("At least one validation sampling probability must be positive.")
 
-    iterators = [iter(dataset) for dataset in active_datasets]
+    return active_datasets, active_probabilities
+
+
+def _allocate_stratified_sample_counts(
+    probabilities: Sequence[float],
+    num_samples: int,
+    rng: np.random.Generator,
+) -> list[int]:
+    if num_samples <= 0:
+        return [0] * len(probabilities)
+
+    probabilities_array = np.asarray(probabilities, dtype=np.float64)
+    probabilities_array /= probabilities_array.sum()
+    num_strata = len(probabilities_array)
+
+    if num_samples < num_strata:
+        selected = rng.choice(num_strata, size=num_samples, replace=False, p=probabilities_array)
+        allocations = [0] * num_strata
+        for idx in selected:
+            allocations[int(idx)] = 1
+        return allocations
+
+    allocations = [1] * num_strata
+    remaining = num_samples - num_strata
+    expected = probabilities_array * remaining
+    extra = np.floor(expected).astype(int)
+    allocations = [allocation + int(extra_count) for allocation, extra_count in zip(allocations, extra)]
+
+    shortfall = num_samples - sum(allocations)
+    if shortfall > 0:
+        remainders = expected - extra
+        # Add seed-controlled jitter only to break exact ties deterministically.
+        tie_breaker = rng.random(num_strata) * 1e-12
+        for idx in np.argsort(-(remainders + tie_breaker))[:shortfall]:
+            allocations[int(idx)] += 1
+
+    return allocations
+
+
+def _reservoir_sample_dataset_entries(
+    dataset,
+    num_samples: int,
+    rng: np.random.Generator,
+    max_entries_to_scan: int,
+) -> list[dict]:
+    if num_samples <= 0:
+        return []
+
+    samples: list[dict] = []
+    seen = 0
+    for entry in dataset:
+        seen += 1
+        if len(samples) < num_samples:
+            samples.append(entry)
+        else:
+            replace_idx = int(rng.integers(seen))
+            if replace_idx < num_samples:
+                samples[replace_idx] = entry
+
+        if seen >= max_entries_to_scan:
+            break
+
+    return samples
+
+
+def _has_random_access(dataset) -> bool:
+    return hasattr(dataset, "__len__") and hasattr(dataset, "__getitem__")
+
+
+def _random_sample_dataset_entries(
+    dataset,
+    num_samples: int,
+    rng: np.random.Generator,
+    max_attempts_multiplier: int,
+) -> list[dict]:
+    if num_samples <= 0:
+        return []
+    if not _has_random_access(dataset):
+        return []
+
+    dataset_length = len(dataset)
+    if dataset_length <= 0:
+        return []
+
+    target_num_samples = min(num_samples, dataset_length)
+    max_attempts = min(dataset_length, max(target_num_samples * max_attempts_multiplier, target_num_samples))
+    candidate_indices = rng.choice(dataset_length, size=max_attempts, replace=False)
+    samples = []
+
+    for row_index in candidate_indices:
+        entry = dataset[int(row_index)]
+        if isinstance(dataset, FilteredRandomAccessDataset) and not dataset.predicate(entry):
+            continue
+
+        samples.append(entry)
+        if len(samples) >= target_num_samples:
+            break
+
+    return samples
+
+
+def sample_validation_entries(
+    datasets: Sequence,
+    probabilities: Sequence[float],
+    num_samples: int,
+    seed: int,
+    *,
+    stratified: bool = True,
+    scan_multiplier: int = 5,
+    random_access_attempt_multiplier: int = 5,
+) -> list[dict]:
+    """Sample a fixed, lightweight validation set from one or more iterable datasets."""
+    if num_samples <= 0:
+        return []
+    if scan_multiplier <= 0:
+        raise ValueError(f"`scan_multiplier` must be positive, got {scan_multiplier}.")
+    if random_access_attempt_multiplier <= 0:
+        raise ValueError(
+            f"`random_access_attempt_multiplier` must be positive, got {random_access_attempt_multiplier}."
+        )
+
+    active_datasets, active_probabilities = _validate_sampling_probabilities(datasets, probabilities)
     rng = np.random.default_rng(seed)
+
+    if stratified:
+        allocations = _allocate_stratified_sample_counts(active_probabilities, num_samples, rng)
+        sampled_entries = []
+        for dataset_idx, (dataset, allocation) in enumerate(zip(active_datasets, allocations)):
+            stratum_rng = np.random.default_rng(int(rng.integers(0, 2**63 - 1)))
+            stratum_entries = _random_sample_dataset_entries(
+                dataset=dataset,
+                num_samples=allocation,
+                rng=stratum_rng,
+                max_attempts_multiplier=random_access_attempt_multiplier,
+            )
+            if len(stratum_entries) < allocation:
+                remaining = allocation - len(stratum_entries)
+                selected_record_ids = {
+                    entry.record_id for entry in stratum_entries if isinstance(entry, IdentifiedEntry)
+                }
+                fallback_entries = _reservoir_sample_dataset_entries(
+                    dataset=ExcludeValidationEntriesDataset(dataset, selected_record_ids)
+                    if selected_record_ids
+                    else dataset,
+                    num_samples=remaining,
+                    rng=stratum_rng,
+                    max_entries_to_scan=max(remaining * scan_multiplier, remaining),
+                )
+                stratum_entries.extend(fallback_entries)
+            if len(stratum_entries) < allocation:
+                raise ValueError(
+                    f"Only {len(stratum_entries)} usable entries were found in validation stratum {dataset_idx}, "
+                    f"but {allocation} were requested."
+                )
+            sampled_entries.extend(stratum_entries)
+
+        rng.shuffle(sampled_entries)
+        return sampled_entries
+
+    iterators = [iter(dataset) for dataset in active_datasets]
     sampled_entries: list[dict] = []
 
     while len(sampled_entries) < num_samples and active_datasets:
@@ -936,10 +1183,18 @@ def write_validation_manifest(
     validation_entries: Sequence[dict],
 ) -> None:
     record_ids = get_validation_record_ids(validation_entries)
+    source_counts: dict[str, int] = {}
+    for source_path, _ in record_ids:
+        source_counts[source_path] = source_counts.get(source_path, 0) + 1
     payload = {
         "validation_seed": validation_seed,
         "num_validation_entries": len(validation_entries),
         "num_excluded_training_entries": len(record_ids),
+        "num_sources": len(source_counts),
+        "source_counts": [
+            {"source_path": source_path, "num_entries": count}
+            for source_path, count in sorted(source_counts.items())
+        ],
         "records": [
             {"source_path": source_path, "row_index": row_index}
             for source_path, row_index in sorted(record_ids)
@@ -1374,13 +1629,13 @@ def main(
     )
 
     train_datasets = [
-        Filter(
+        FilteredRandomAccessDataset(
+            build_raw_dataset(Path(data_path)),
             partial(
                 has_enough_chronos2_observations,
                 min_length=min_past + prediction_length,
                 max_missing_prop=max_missing_prop,
             ),
-            build_raw_dataset(Path(data_path)),
         )
         for data_path in expanded_training_data_paths
     ]
@@ -1403,13 +1658,13 @@ def main(
                 logger,
             )
             validation_datasets = [
-                Filter(
+                FilteredRandomAccessDataset(
+                    build_raw_dataset(Path(data_path)),
                     partial(
                         has_enough_chronos2_observations,
                         min_length=min_past + prediction_length,
                         max_missing_prop=max_missing_prop,
                     ),
-                    build_raw_dataset(Path(data_path)),
                 )
                 for data_path in expanded_validation_data_paths
             ]
