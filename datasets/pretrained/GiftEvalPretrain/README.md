@@ -32,3 +32,11 @@ Each dataset is saved as a Hugging Face `save_to_disk` directory:
 ```text
 datasets/pretrained/GiftEvalPretrain/<dataset_name>
 ```
+
+用huggingface cli下载大数据集
+
+```powershell
+$env:HF_HUB_ENABLE_HF_TRANSFER = "1"
+
+hf download Salesforce/GiftEvalPretrain --repo-type dataset --include "buildings_900k/*" --local-dir "datasets/pretrained/GiftEvalPretrain" 
+```

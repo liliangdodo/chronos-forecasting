@@ -1176,6 +1176,119 @@ def get_validation_record_ids(entries: Sequence[dict]) -> set[ValidationRecordId
     return record_ids
 
 
+def _manifest_path_parts(source_path: str) -> tuple[str, ...]:
+    normalized = str(source_path).replace("\\", "/").rstrip("/")
+    return tuple(part.lower() for part in normalized.split("/") if part)
+
+
+def _common_suffix_length(left: Sequence[str], right: Sequence[str]) -> int:
+    count = 0
+    for left_part, right_part in zip(reversed(left), reversed(right)):
+        if left_part != right_part:
+            break
+        count += 1
+    return count
+
+
+def _get_identified_source_path(dataset) -> Optional[str]:
+    current = dataset
+    while current is not None:
+        source_path = getattr(current, "source_path", None)
+        if source_path is not None:
+            return str(source_path)
+        current = getattr(current, "dataset", None)
+    return None
+
+
+def _build_manifest_source_lookup(datasets: Sequence) -> dict[str, Any]:
+    source_lookup = {}
+    for dataset in datasets:
+        source_path = _get_identified_source_path(dataset)
+        if source_path is None:
+            raise TypeError("Validation manifest reuse requires datasets with stable source paths.")
+        source_lookup[source_path] = dataset
+    return source_lookup
+
+
+def _resolve_manifest_source_dataset(
+    manifest_source_path: str,
+    source_lookup: Mapping[str, Any],
+):
+    if manifest_source_path in source_lookup:
+        return manifest_source_path, source_lookup[manifest_source_path]
+
+    manifest_parts = _manifest_path_parts(manifest_source_path)
+    candidates = []
+    for source_path, dataset in source_lookup.items():
+        suffix_length = _common_suffix_length(manifest_parts, _manifest_path_parts(source_path))
+        if suffix_length > 0:
+            candidates.append((suffix_length, source_path, dataset))
+
+    if not candidates:
+        raise ValueError(
+            f"Validation manifest source path does not match any configured dataset: {manifest_source_path}"
+        )
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_suffix_length = candidates[0][0]
+    best_candidates = [candidate for candidate in candidates if candidate[0] == best_suffix_length]
+    if len(best_candidates) > 1:
+        matching_paths = [source_path for _, source_path, _ in best_candidates]
+        raise ValueError(
+            "Validation manifest source path is ambiguous after suffix matching: "
+            f"{manifest_source_path}. Candidates: {matching_paths}"
+        )
+
+    _, source_path, dataset = best_candidates[0]
+    return source_path, dataset
+
+
+def load_validation_entries_from_manifest(
+    path: Path,
+    datasets: Sequence,
+    *,
+    expected_num_samples: Optional[int] = None,
+) -> list[dict]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise ValueError(f"Validation manifest {path} does not contain a `records` list.")
+
+    if expected_num_samples is not None and expected_num_samples > 0 and len(records) != expected_num_samples:
+        raise ValueError(
+            f"Validation manifest {path} contains {len(records)} records, "
+            f"but `validation_num_samples` is {expected_num_samples}."
+        )
+
+    source_lookup = _build_manifest_source_lookup(datasets)
+    resolved_sources: dict[str, tuple[str, Any]] = {}
+    validation_entries = []
+
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError(f"Invalid validation manifest record: {record}")
+        manifest_source_path = record.get("source_path")
+        row_index = record.get("row_index")
+        if not isinstance(manifest_source_path, str) or not isinstance(row_index, int):
+            raise ValueError(f"Invalid validation manifest record: {record}")
+
+        if manifest_source_path not in resolved_sources:
+            resolved_sources[manifest_source_path] = _resolve_manifest_source_dataset(
+                manifest_source_path,
+                source_lookup,
+            )
+        resolved_source_path, dataset = resolved_sources[manifest_source_path]
+        entry = dataset[row_index]
+        if isinstance(dataset, FilteredRandomAccessDataset) and not dataset.predicate(entry):
+            raise ValueError(
+                f"Validation manifest record no longer passes the dataset filter: "
+                f"source_path={manifest_source_path}, row_index={row_index}"
+            )
+        validation_entries.append(IdentifiedEntry(entry, record_id=(resolved_source_path, row_index)))
+
+    return validation_entries
+
+
 def write_validation_manifest(
     path: Path,
     *,
@@ -1466,6 +1579,7 @@ def main(
     validation_data_paths: Optional[str] = None,
     validation_num_samples: int = 256,
     validation_seed: int = 0,
+    validation_manifest_path: Optional[str] = None,
     context_length: int = 2048,
     prediction_length: int = 64,
     min_past: int = 64,
@@ -1520,6 +1634,7 @@ def main(
     training_data_paths = _parse_collection_arg(training_data_paths, "training_data_paths", list)
     validation_data_paths = _parse_optional_list_arg(validation_data_paths, "validation_data_paths")
     quantiles = _parse_collection_arg(quantiles, "quantiles", list)
+    validation_manifest_path = Path(validation_manifest_path) if validation_manifest_path else None
 
     if probability is None:
         probability = [1.0 / len(training_data_paths)] * len(training_data_paths)
@@ -1647,10 +1762,6 @@ def main(
     if validation_num_samples > 0:
         validation_source = "configured validation datasets"
         validation_probabilities = [1.0] * len(expanded_validation_data_paths or [])
-        log_on_main(
-            f"Sampling {validation_num_samples} fixed entries for lightweight validation.",
-            logger,
-        )
         if expanded_validation_data_paths:
             log_on_main(
                 f"Using {len(expanded_validation_data_paths)} configured validation datasets: "
@@ -1673,15 +1784,31 @@ def main(
             validation_datasets = train_datasets
             validation_probabilities = expanded_probability
 
-        validation_entries = sample_validation_entries(
-            datasets=validation_datasets,
-            probabilities=validation_probabilities,
-            num_samples=validation_num_samples,
-            seed=validation_seed,
-        )
+        if validation_manifest_path is not None:
+            log_on_main(
+                f"Loading fixed lightweight validation entries from manifest: {validation_manifest_path}",
+                logger,
+            )
+            validation_entries = load_validation_entries_from_manifest(
+                validation_manifest_path,
+                validation_datasets,
+                expected_num_samples=validation_num_samples,
+            )
+            validation_source = f"manifest {validation_manifest_path}"
+        else:
+            log_on_main(
+                f"Sampling {validation_num_samples} fixed entries for lightweight validation.",
+                logger,
+            )
+            validation_entries = sample_validation_entries(
+                datasets=validation_datasets,
+                probabilities=validation_probabilities,
+                num_samples=validation_num_samples,
+                seed=validation_seed,
+            )
         excluded_training_record_ids = get_validation_record_ids(validation_entries)
         log_on_main(
-            f"Cached {len(validation_entries)} lightweight validation entries sampled from {validation_source}; "
+            f"Cached {len(validation_entries)} lightweight validation entries from {validation_source}; "
             f"excluding {len(excluded_training_record_ids)} matching records from training.",
             logger,
         )
