@@ -2,6 +2,50 @@
 
 This directory stores the subset of `Salesforce/GiftEvalPretrain` used by the Chronos-2 training data table but not available from `autogluon/chronos_datasets`.
 
+
+Download specified datasets:
+
+```powershell
+uv run python datasets/pretrained/GiftEvalPretrain/download_gifteval_pretrain.py `
+  --datasets buildings_900k
+```
+
+Resume an interrupted large dataset download. By default, the script keeps
+existing shard files and downloads only missing files. Do not add
+`--overwrite` when resuming:
+
+```powershell
+uv run python datasets/pretrained/GiftEvalPretrain/download_gifteval_pretrain.py `
+  --datasets buildings_900k `
+  --enable-hf-transfer `
+  --retries 5 `
+  --retry-delay 30
+```
+
+If the network is unstable, disable parallel downloads and download files one
+by one:
+
+```powershell
+uv run python datasets/pretrained/GiftEvalPretrain/download_gifteval_pretrain.py `
+  --datasets buildings_900k `
+  --max-workers 1 `
+  --enable-hf-transfer `
+  --retries 5 `
+  --retry-delay 30
+```
+
+Force a clean re-download only when you intentionally want to delete the local
+dataset directory first:
+
+```powershell
+uv run python datasets/pretrained/GiftEvalPretrain/download_gifteval_pretrain.py `
+  --datasets buildings_900k `
+  --overwrite `
+  --enable-hf-transfer `
+  --retries 5 `
+  --retry-delay 30
+```
+
 Download the selected sub-datasets listed in `dataset_list.txt`:
 
 ```bash

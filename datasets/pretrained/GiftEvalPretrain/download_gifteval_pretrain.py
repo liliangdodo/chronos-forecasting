@@ -75,9 +75,18 @@ def parse_args() -> argparse.Namespace:
         help="Seconds to wait between retries. Default: 10",
     )
     parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=8,
+        help=(
+            "Maximum number of parallel download workers used by huggingface_hub.snapshot_download. "
+            "Set to 1 to download files one by one. Default: 8"
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite an existing saved dataset directory.",
+        help="Remove an existing local dataset directory before downloading it again.",
     )
     parser.add_argument(
         "--enable-hf-transfer",
@@ -134,6 +143,16 @@ def is_saved_dataset_complete(path: Path, expected_files: set[str] | None = None
     return expected_files.issubset(local_files)
 
 
+def list_local_dataset_files(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    return {
+        file.relative_to(path).as_posix()
+        for file in path.rglob("*")
+        if file.is_file()
+    }
+
+
 def get_remote_dataset_files(repo_id: str, dataset_names: Iterable[str]) -> dict[str, set[str]]:
     from huggingface_hub import HfApi
 
@@ -163,19 +182,29 @@ def download_one(
     cache_dir: Path,
     overwrite: bool,
     expected_files: set[str],
+    max_workers: int,
 ) -> Path:
     from huggingface_hub import snapshot_download
 
     dataset_dir = output_dir / dataset_name
     if is_saved_dataset_complete(dataset_dir, expected_files=expected_files):
         if overwrite:
+            print(f"[overwrite] {dataset_name}: removing complete dataset directory {dataset_dir}")
             shutil.rmtree(dataset_dir)
         else:
             print(f"[skip] {dataset_name}: complete dataset already exists at {dataset_dir}")
             return dataset_dir
     elif dataset_dir.exists():
-        print(f"[cleanup] {dataset_name}: removing incomplete dataset directory {dataset_dir}")
-        shutil.rmtree(dataset_dir)
+        if overwrite:
+            print(f"[overwrite] {dataset_name}: removing incomplete dataset directory {dataset_dir}")
+            shutil.rmtree(dataset_dir)
+        else:
+            local_files = list_local_dataset_files(dataset_dir)
+            missing_count = len(expected_files - local_files)
+            print(
+                f"[resume] {dataset_name}: keeping {len(local_files)} existing file(s), "
+                f"downloading {missing_count} missing file(s)"
+            )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -188,14 +217,11 @@ def download_one(
         cache_dir=str(cache_dir),
         allow_patterns=allow_patterns,
         local_dir_use_symlinks=False,
+        max_workers=max_workers,
     )
 
     if not is_saved_dataset_complete(dataset_dir, expected_files=expected_files):
-        local_files = {
-            file.relative_to(dataset_dir).as_posix()
-            for file in dataset_dir.rglob("*")
-            if file.is_file()
-        } if dataset_dir.exists() else set()
+        local_files = list_local_dataset_files(dataset_dir)
         missing_files = sorted(expected_files - local_files)
         preview = ", ".join(missing_files[:10])
         suffix = "" if len(missing_files) <= 10 else f", ... ({len(missing_files)} total)"
@@ -213,6 +239,7 @@ def download_one_with_retries(
     cache_dir: Path,
     overwrite: bool,
     expected_files: set[str],
+    max_workers: int,
     retries: int,
     retry_delay: float,
 ) -> Path:
@@ -228,6 +255,7 @@ def download_one_with_retries(
                 cache_dir=cache_dir,
                 overwrite=overwrite,
                 expected_files=expected_files,
+                max_workers=max_workers,
             )
         except Exception as exc:
             last_error = exc
@@ -247,6 +275,7 @@ def download_many(
     cache_dir: Path,
     overwrite: bool,
     remote_files_by_dataset: dict[str, set[str]],
+    max_workers: int,
     retries: int,
     retry_delay: float,
 ) -> None:
@@ -260,6 +289,7 @@ def download_many(
                 cache_dir=cache_dir,
                 overwrite=overwrite,
                 expected_files=remote_files_by_dataset[dataset_name],
+                max_workers=max_workers,
                 retries=retries,
                 retry_delay=retry_delay,
             )
@@ -284,6 +314,8 @@ def main() -> None:
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
     if args.hf_endpoint:
         os.environ["HF_ENDPOINT"] = args.hf_endpoint
+    if args.max_workers < 1:
+        raise ValueError(f"--max-workers must be at least 1, got {args.max_workers}")
 
     dataset_names = args.datasets if args.datasets is not None else read_dataset_list(args.dataset_list.resolve())
     output_dir = args.output_dir.resolve()
@@ -294,6 +326,7 @@ def main() -> None:
         print(f"[selected] {dataset_name}")
     print(f"[output] {output_dir}")
     print(f"[cache] {cache_dir}")
+    print(f"[max-workers] {args.max_workers}")
     if args.enable_hf_transfer:
         print("[transfer] HF_HUB_ENABLE_HF_TRANSFER=1")
     if args.hf_endpoint:
@@ -312,6 +345,7 @@ def main() -> None:
         cache_dir=cache_dir,
         overwrite=args.overwrite,
         remote_files_by_dataset=remote_files_by_dataset,
+        max_workers=args.max_workers,
         retries=args.retries,
         retry_delay=args.retry_delay,
     )
