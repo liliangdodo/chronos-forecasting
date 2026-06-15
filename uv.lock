@@ -364,6 +364,7 @@ dependencies = [
     { name = "hf-transfer" },
     { name = "hf-xet" },
     { name = "numpy" },
+    { name = "pandas", extra = ["pyarrow"] },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "torch" },
@@ -385,13 +386,11 @@ dev = [
 extras = [
     { name = "boto3" },
     { name = "fev" },
-    { name = "pandas", extra = ["pyarrow"] },
     { name = "peft" },
 ]
 test = [
     { name = "boto3" },
     { name = "fev" },
-    { name = "pandas", extra = ["pyarrow"] },
     { name = "peft" },
     { name = "pytest" },
 ]
@@ -401,7 +400,7 @@ typecheck = [
 
 [package.metadata]
 requires-dist = [
-    { name = "accelerate", specifier = ">=0.34,<2" },
+    { name = "accelerate", specifier = ">=1.1.0,<2" },
     { name = "boto3", marker = "extra == 'extras'", specifier = ">=1.10,<2" },
     { name = "boto3", marker = "extra == 'test'", specifier = ">=1.10,<2" },
     { name = "datasets", marker = "extra == 'dev'", specifier = ">=3.0,<4" },
@@ -416,16 +415,15 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'typecheck'", specifier = "~=1.9" },
     { name = "numpy", specifier = ">=1.21,<3" },
     { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.0,<2.4" },
-    { name = "pandas", extras = ["pyarrow"], marker = "extra == 'extras'", specifier = ">=2.0,<2.4" },
-    { name = "pandas", extras = ["pyarrow"], marker = "extra == 'test'", specifier = ">=2.0,<2.4" },
-    { name = "peft", marker = "extra == 'extras'", specifier = ">=0.13.0,<0.18" },
-    { name = "peft", marker = "extra == 'test'", specifier = ">=0.13.0,<1" },
+    { name = "pandas", extras = ["pyarrow"], specifier = ">=2.0,<2.4" },
+    { name = "peft", marker = "extra == 'extras'", specifier = ">=0.18.1,<1" },
+    { name = "peft", marker = "extra == 'test'", specifier = ">=0.18.1,<1" },
     { name = "pytest", marker = "extra == 'test'", specifier = "~=8.0" },
     { name = "rich", marker = "extra == 'dev'" },
     { name = "scikit-learn", specifier = ">=1.6.0,<2" },
     { name = "tensorboard", marker = "extra == 'dev'" },
     { name = "torch", specifier = ">=2.2,<3" },
-    { name = "transformers", specifier = ">=4.41,<5" },
+    { name = "transformers", specifier = ">=4.41" },
     { name = "typer", marker = "extra == 'dev'" },
     { name = "typer-config", marker = "extra == 'dev'" },
 ]
@@ -1790,7 +1788,7 @@ wheels = [
 
 [[package]]
 name = "peft"
-version = "0.17.1"
+version = "0.19.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
@@ -1804,9 +1802,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/70/b8/2e79377efaa1e5f0d70a497db7914ffd355846e760ffa2f7883ab0f600fb/peft-0.17.1.tar.gz", hash = "sha256:e6002b42517976c290b3b8bbb9829a33dd5d470676b2dec7cb4df8501b77eb9f", size = 568192, upload-time = "2025-08-21T09:25:22.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/cf/037f1e3d5186496c05513a6754639e2dab3038a05f384284d49a9bd06a2d/peft-0.19.1.tar.gz", hash = "sha256:0d97542fe96dcdaa20d3b81c06f26f988618f416a73544ab23c3618ccb674a40", size = 763738, upload-time = "2026-04-16T15:46:45.105Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/fe/a2da1627aa9cb6310b6034598363bd26ac301c4a99d21f415b1b2855891e/peft-0.17.1-py3-none-any.whl", hash = "sha256:3d129d64def3d74779c32a080d2567e5f7b674e77d546e3585138216d903f99e", size = 504896, upload-time = "2025-08-21T09:25:18.974Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/b6/f54d676ed93cc2dd2234c3b172ea9c8c3d7d29361e66b1b23dec57a67465/peft-0.19.1-py3-none-any.whl", hash = "sha256:2113f72a81621b5913ef28f9022204c742df111890c5f49d812716a4a301e356", size = 680692, upload-time = "2026-04-16T15:46:42.886Z" },
 ]
 
 [[package]]

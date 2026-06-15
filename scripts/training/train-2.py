@@ -27,9 +27,10 @@ from typer_config import use_yaml_config
 from chronos import Chronos2Pipeline
 from chronos.chronos2 import Chronos2Model
 from chronos.chronos2.config import Chronos2CoreConfig
-from chronos.chronos2.dataset import DatasetMode, left_pad_and_cat_2D, prepare_inputs
+from chronos.chronos2.dataset import left_pad_and_cat_2D
+from chronos.chronos2.preprocess import from_list_of_dicts
 from chronos.chronos2.trainer import Chronos2Trainer, EvaluateAndSaveFinalStepCallback
-from train import get_next_path, is_main_process, log_on_main, save_training_info
+from train import _TRANSFORMERS_V5, get_next_path, is_main_process, log_on_main, save_training_info
 
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -1354,12 +1355,9 @@ class Chronos2ArrowDataset(IterableDataset):
 
     def preprocess_entry(self, entry: Mapping[str, Any]) -> dict[str, Any]:
         normalized_entry = _normalize_arrow_entry(entry, np_dtype=self.np_dtype)
-        dataset_mode = DatasetMode.TRAIN if self.mode == "training" else DatasetMode.VALIDATION
-        prepared = prepare_inputs(
+        prepared = from_list_of_dicts(
             [normalized_entry],
             prediction_length=self.prediction_length,
-            min_past=self.min_past,
-            mode=dataset_mode,
         )
         return prepared[0]
 
@@ -1883,7 +1881,7 @@ def main(
         per_device_eval_batch_size=per_device_eval_batch_size or per_device_train_batch_size,
         learning_rate=learning_rate,
         lr_scheduler_type=lr_scheduler_type,
-        warmup_ratio=warmup_ratio,
+        **({"warmup_steps": round(warmup_ratio * max_steps)} if _TRANSFORMERS_V5 else {"warmup_ratio": warmup_ratio}),
         optim=optim,
         logging_strategy="steps",
         logging_steps=log_steps,
